@@ -504,4 +504,13 @@ void* ResourceManager::GetResourceRawPointer(uint64_t crc) {
     return GetResourceRawPointer(resource);
 }
 
+void ResourceManager::SetCachedResource(const std::string& filePath, std::shared_ptr<IResource> resource) {
+    if (resource == nullptr) {
+        return;
+    }
+    const std::lock_guard<std::mutex> lock(mMutex);
+    ResourceIdentifier identifier{ filePath, mDefaultCacheOwner, mDefaultCacheArchive };
+    mResourceCache[identifier] = resource;
+}
+
 } // namespace Ship

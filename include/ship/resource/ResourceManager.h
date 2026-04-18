@@ -120,6 +120,14 @@ class ResourceManager {
     void* GetResourceRawPointer(const char* name);
     void* GetResourceRawPointer(uint64_t crc);
 
+    // Injects a pre-loaded resource into the cache under the given path so
+    // later GetResource*/LoadResource calls resolve it without going back to
+    // archive/file lookup.  Intended for callers that synthesise resources
+    // outside the archive-backed pipeline (e.g. per-DummyPlayer baked assets
+    // keyed under "coopchar/<folder>/...").  The resource's backing data must
+    // remain alive for as long as any render consumer holds the pointer.
+    void SetCachedResource(const std::string& filePath, std::shared_ptr<IResource> resource);
+
   protected:
     std::shared_ptr<std::vector<std::shared_ptr<IResource>>> LoadResourcesProcess(const ResourceFilter& filter);
     void UnloadResourcesProcess(const ResourceFilter& filter);

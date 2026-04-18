@@ -1,6 +1,7 @@
 #include "ship/Context.h"
 #include "ship/controller/controldevice/controller/mapping/keyboard/KeyboardScancodes.h"
 #include <iostream>
+#include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include "ship/install_config.h"
@@ -95,7 +96,8 @@ bool Context::Init(const std::vector<std::string>& archivePaths, const std::unor
 }
 
 bool Context::InitLogging(spdlog::level::level_enum debugBuildLogLevel,
-                          spdlog::level::level_enum releaseBuildLogLevel) {
+                          spdlog::level::level_enum releaseBuildLogLevel,
+                          const std::string& logFilePath) {
     if (GetLogger() != nullptr) {
         return true;
     }
@@ -142,8 +144,17 @@ bool Context::InitLogging(spdlog::level::level_enum debugBuildLogLevel,
         sinks.push_back(systemConsoleSink);
 #endif
 
-        auto logPath = GetPathRelativeToAppDirectory(("logs/" + GetName() + ".log"));
-        auto fileSink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(logPath, 1024 * 1024 * 10, 10);
+        // If the caller supplied an explicit log file path (e.g. SoH's per-session
+        // numbered path computed before InitLogging), open that file directly with
+        // a non-rotating sink — the filename must remain stable for the session.
+        // Otherwise fall back to the historical size-based rotating sink.
+        spdlog::sink_ptr fileSink;
+        if (!logFilePath.empty()) {
+            fileSink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(logFilePath);
+        } else {
+            auto logPath = GetPathRelativeToAppDirectory(("logs/" + GetName() + ".log"));
+            fileSink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(logPath, 1024 * 1024 * 10, 10);
+        }
         sinks.push_back(fileSink);
 #ifdef _DEBUG
         mLogger = std::make_shared<spdlog::logger>("multi_sink", sinks.begin(), sinks.end());

@@ -10,8 +10,10 @@
 
 #include <any>
 #include <map>
+#include <mutex>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <list>
 #include <stack>
@@ -3107,6 +3109,24 @@ bool gfx_vtx_otr_filepath_handler_custom(F3DGfx** cmd0) {
     size_t vtxDataOff = cmd->words.w1 & 0xFFFF;
     F3DVtx* vtx =
         (F3DVtx*)Ship::Context::GetInstance()->GetResourceManager()->GetResourceRawPointer((const char*)fileName);
+    if (vtx == nullptr) {
+        // Deduped logging: a failing path typically misses every frame (~60 Hz)
+        // and floods the log.  Log the first occurrence of each unique path only.
+        static std::unordered_set<std::string> sLoggedMisses;
+        static std::mutex sLoggedMissesMutex;
+        const std::string key = fileName ? fileName : "(null)";
+        bool firstTime = false;
+        {
+            std::lock_guard<std::mutex> lock(sLoggedMissesMutex);
+            firstTime = sLoggedMisses.insert(key).second;
+        }
+        if (firstTime) {
+            SPDLOG_ERROR("G_VTX_OTR_FILEPATH: Vertex resource null for \"{}\" (first occurrence — "
+                         "further misses of this path will be suppressed)",
+                         key);
+        }
+        return false;
+    }
     vtx += vtxDataOff;
 
     gfx->GfxSpVertex(vtxCnt, vtxIdxOff, vtx);
@@ -3127,10 +3147,19 @@ bool gfx_dl_otr_filepath_handler_custom(F3DGfx** cmd0) {
             g_exec_stack.branch(cmd);
             return true; // shortcut cmd increment
         } else {
-            assert(0 && "???");
-            // gfx_path.pop_back();
-            // cmd = cmd_stack.top();
-            // cmd_stack.pop();
+            static std::unordered_set<std::string> sLoggedDLMisses;
+            static std::mutex sLoggedDLMissesMutex;
+            const std::string key = fileName ? fileName : "(null)";
+            bool firstTime = false;
+            {
+                std::lock_guard<std::mutex> lock(sLoggedDLMissesMutex);
+                firstTime = sLoggedDLMisses.insert(key).second;
+            }
+            if (firstTime) {
+                SPDLOG_ERROR("G_DL_OTR_FILEPATH: DisplayList resource null for \"{}\" (first occurrence — "
+                             "further misses of this path will be suppressed)",
+                             key);
+            }
         }
     }
     return false;
