@@ -1,5 +1,48 @@
 #include "libultraship/bridge/consolevariablebridge.h"
 #include "ship/Context.h"
+#include <spdlog/spdlog.h>
+#include <cstdlib>
+
+// KB-19 / #171 Experiment 4 — recursion-depth instrumentation for CVarSetString.
+// The #171 Deku Tree crash signature is 17+ stack frames of CVarSetString
+// before SEGV at RIP that does not correspond to this function's body. Two
+// hypotheses:
+//   (a) Real recursion via a callback that re-enters CVarSetString. If true,
+//       sCVarSetStringDepth reaches >1 at runtime.
+//   (b) Stack-walker artifact: unwinder falls into CVarSetString's small
+//       address range when the real frames are corrupted. If true,
+//       sCVarSetStringDepth never exceeds 1 even when the crash still
+//       reproduces.
+// This counter is thread_local because CVar reads/writes can fire on the
+// receive thread (Anchor packet handlers) AND the main thread.
+static thread_local int sCVarSetStringDepth = 0;
+static thread_local int sCVarSetStringPeakDepth = 0;
+
+namespace {
+struct CVarSetStringDepthGuard {
+    CVarSetStringDepthGuard(const char* name, const char* value) : mName(name) {
+        ++sCVarSetStringDepth;
+        if (sCVarSetStringDepth > sCVarSetStringPeakDepth) {
+            sCVarSetStringPeakDepth = sCVarSetStringDepth;
+        }
+        // Log the first time we cross each new depth threshold within a thread.
+        // 5+ is suspicious; 16+ is almost certainly real recursion (#171).
+        if (sCVarSetStringDepth >= 5 && sCVarSetStringDepth == sCVarSetStringPeakDepth) {
+            SPDLOG_CRITICAL("[KB19/171] CVarSetString depth={} name=\"{}\" value=\"{}\" — possible recursion",
+                            sCVarSetStringDepth, name ? name : "<null>", value ? value : "<null>");
+        }
+        if (sCVarSetStringDepth >= 32) {
+            SPDLOG_CRITICAL("[KB19/171] CVarSetString depth={} — aborting before stack overflow",
+                            sCVarSetStringDepth);
+            std::abort();
+        }
+    }
+    ~CVarSetStringDepthGuard() {
+        --sCVarSetStringDepth;
+    }
+    const char* mName;
+};
+} // namespace
 
 std::shared_ptr<Ship::CVar> CVarGet(const char* name) {
     return Ship::Context::GetInstance()->GetConsoleVariables()->Get(name);
@@ -35,6 +78,7 @@ void CVarSetFloat(const char* name, float value) {
 }
 
 void CVarSetString(const char* name, const char* value) {
+    CVarSetStringDepthGuard depthGuard(name, value);
     Ship::Context::GetInstance()->GetConsoleVariables()->SetString(name, value);
 }
 
