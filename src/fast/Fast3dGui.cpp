@@ -240,7 +240,7 @@ void Fast3dGui::ImGuiWMNewFrame() {
 // Bind ImGui's SDL2 gamepad backend to the controller(s) the
 // ControlDeck has already opened
 void Fast3dGui::RefreshImGuiGamepads() {
-    auto window = Ship::Context::GetInstance()->GetWindow();
+    auto window = Ship::Context::GetRawInstance()->GetWindow();
     auto backend = window->GetWindowBackend();
     if (backend != WindowBackend::FAST3D_SDL_OPENGL && backend != WindowBackend::FAST3D_SDL_METAL) {
         return;
