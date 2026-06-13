@@ -33,7 +33,7 @@
 extern "C" {
 
 void ControllerBlockGameInput(uint16_t inputBlockId) {
-    auto ctx = Ship::Context::GetInstance();
+    auto* ctx = Ship::Context::GetRawInstance();
     if (ctx == nullptr) {
         return;
     }
@@ -45,7 +45,7 @@ void ControllerBlockGameInput(uint16_t inputBlockId) {
 }
 
 void ControllerUnblockGameInput(uint16_t inputBlockId) {
-    auto ctx = Ship::Context::GetInstance();
+    auto* ctx = Ship::Context::GetRawInstance();
     if (ctx == nullptr) {
         return;
     }
