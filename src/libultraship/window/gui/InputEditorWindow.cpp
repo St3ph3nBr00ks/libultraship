@@ -6,6 +6,7 @@
 #include "ship/controller/controldevice/controller/mapping/sdl/SDLAxisDirectionToButtonMapping.h"
 #include "ship/controller/controldeck/ControlDeck.h"
 #include "libultraship/libultra/controller.h"
+#include <SDL2/SDL.h>
 
 #define SCALE_IMGUI_SIZE(value) ((value / 13.0f) * ImGui::GetFontSize())
 
@@ -1217,10 +1218,22 @@ void InputEditorWindow::DrawDeviceToggles(uint8_t portIndex) {
         auto notIgnored = !connectedDeviceManager->PortIsIgnoringInstanceId(portIndex, instanceId);
         ImGui::PopItemFlag();
         if (ImGui::Checkbox(StringHelper::Sprintf("###instanceId_%d", instanceId).c_str(), &notIgnored)) {
-            if (notIgnored) {
-                connectedDeviceManager->UnignoreInstanceIdForPort(portIndex, instanceId);
+            // Persist via composite device key (GUID + path/serial/name-index).
+            // See Plans/controller_port_persistence_plan.md, libultraship#2.
+            std::string deviceKey = connectedDeviceManager->GetDeviceKeyForInstanceId(instanceId);
+            if (!deviceKey.empty()) {
+                if (notIgnored) {
+                    connectedDeviceManager->AssignDeviceKeyToPort(portIndex, deviceKey);
+                } else {
+                    connectedDeviceManager->UnassignDeviceKeyFromPort(portIndex, deviceKey);
+                }
+                connectedDeviceManager->SaveAssignmentsToConfig();
             } else {
-                connectedDeviceManager->IgnoreInstanceIdForPort(portIndex, instanceId);
+                if (notIgnored) {
+                    connectedDeviceManager->UnignoreInstanceIdForPort(portIndex, instanceId);
+                } else {
+                    connectedDeviceManager->IgnoreInstanceIdForPort(portIndex, instanceId);
+                }
             }
         };
         ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
