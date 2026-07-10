@@ -1,15 +1,21 @@
 #include "ship/controller/physicaldevice/ConnectedPhysicalDeviceManager.h"
+
 #include <spdlog/spdlog.h>
-#include <sstream>
 #include <unordered_map>
+
 #include "libultraship/bridge/consolevariablebridge.h"
+#include "ship/controller/physicaldevice/ControllerAssignmentStore.h"
 
 namespace {
-constexpr uint8_t kMaxControllerPorts = 4;
-constexpr const char* kCVarKeyConfigured = "gControllers.PortAssignments.Configured";
 
-std::string CVarKeyForPort(uint8_t portIndex) {
-    return "gControllers.PortAssignments.Port" + std::to_string(portIndex);
+constexpr uint8_t kMaxControllerPorts = 4;
+
+// Gate the per-Refresh / per-Rebuild diagnostic logs behind a CVar so they
+// don't spam default logs at INFO level. Kept accessible for troubleshooting.
+constexpr const char* kCVarDebugKey = "gDeveloperTools.ControllerPersistenceDebug";
+
+bool DiagnosticsEnabled() {
+    return CVarGetInteger(kCVarDebugKey, 0) != 0;
 }
 
 // Build a per-device composite key that identifies a physical controller as
@@ -31,26 +37,29 @@ std::string BuildDeviceKey(const std::string& guid, const char* path, const char
     }
     return guid + "#N:" + name + "@" + std::to_string(occurrenceIndex);
 }
+
 } // namespace
 
 namespace Ship {
-ConnectedPhysicalDeviceManager::ConnectedPhysicalDeviceManager() {
-    LoadAssignmentsFromConfig();
+
+ConnectedPhysicalDeviceManager::ConnectedPhysicalDeviceManager()
+    : mAssignmentStore(std::make_unique<ControllerAssignmentStore>()) {
 }
 
-ConnectedPhysicalDeviceManager::~ConnectedPhysicalDeviceManager() {
-}
+ConnectedPhysicalDeviceManager::~ConnectedPhysicalDeviceManager() = default;
+
+// ---------------------------------------------------------------------------
+// SDL device tracking + ignore-list queries
+// ---------------------------------------------------------------------------
 
 std::unordered_map<int32_t, SDL_GameController*>
 ConnectedPhysicalDeviceManager::GetConnectedSDLGamepadsForPort(uint8_t portIndex) {
     std::unordered_map<int32_t, SDL_GameController*> result;
-
     for (const auto& [instanceId, gamepad] : mConnectedSDLGamepads) {
         if (!PortIsIgnoringInstanceId(portIndex, instanceId)) {
             result[instanceId] = gamepad;
         }
     }
-
     return result;
 }
 
@@ -74,18 +83,17 @@ void ConnectedPhysicalDeviceManager::UnignoreInstanceIdForPort(uint8_t portIndex
     mIgnoredInstanceIds[portIndex].erase(instanceId);
 }
 
-void ConnectedPhysicalDeviceManager::HandlePhysicalDeviceConnect(int32_t sdlDeviceIndex) {
+void ConnectedPhysicalDeviceManager::HandlePhysicalDeviceConnect(int32_t /* sdlDeviceIndex */) {
     RefreshConnectedSDLGamepads();
 }
 
-void ConnectedPhysicalDeviceManager::HandlePhysicalDeviceDisconnect(int32_t sdlJoystickInstanceId) {
+void ConnectedPhysicalDeviceManager::HandlePhysicalDeviceDisconnect(int32_t /* sdlJoystickInstanceId */) {
     RefreshConnectedSDLGamepads();
 }
 
 void ConnectedPhysicalDeviceManager::RefreshConnectedSDLGamepads() {
     mConnectedSDLGamepads.clear();
     mConnectedSDLGamepadNames.clear();
-    mConnectedGuids.clear();
     mConnectedDeviceKeys.clear();
     static SDL_JoystickGUID sZeroGuid;
 
@@ -144,92 +152,73 @@ void ConnectedPhysicalDeviceManager::RefreshConnectedSDLGamepads() {
         std::string deviceKey = BuildDeviceKey(deviceGuidCStr, joystickPath, joystickSerial, gamepadName,
                                                occurrenceIdx);
 
-        SPDLOG_INFO("[ControllerPersistence] Device instanceId={} name=\"{}\" guid={} path=\"{}\" serial=\"{}\" key=\"{}\"",
-                    instanceId, gamepadName, deviceGuidCStr,
-                    joystickPath ? joystickPath : "",
-                    joystickSerial ? joystickSerial : "",
-                    deviceKey);
+        if (DiagnosticsEnabled()) {
+            SPDLOG_INFO(
+                "[ControllerPersistence] Device instanceId={} name=\"{}\" guid={} path=\"{}\" serial=\"{}\" key=\"{}\"",
+                instanceId, gamepadName, deviceGuidCStr, joystickPath ? joystickPath : "",
+                joystickSerial ? joystickSerial : "", deviceKey);
+        }
 
         mConnectedSDLGamepads[instanceId] = gamepad;
         mConnectedSDLGamepadNames[instanceId] = gamepadName;
-        mConnectedGuids[instanceId] = deviceGuidCStr;
         mConnectedDeviceKeys[instanceId] = deviceKey;
     }
 
     RebuildIgnoredInstanceIds();
 }
 
-// -----------------------------------------------------------------------------
-// Per-port GUID persistence (Plans/controller_port_persistence_plan.md,
-// libultraship#2).
-// -----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Persistence-backed assignment API — delegates to ControllerAssignmentStore
+// ---------------------------------------------------------------------------
 
-bool ConnectedPhysicalDeviceManager::AnyPortConfigured() const {
-    if (mUserHasConfigured) {
-        return true;
-    }
-    for (const auto& [port, keys] : mEnabledDeviceKeysByPort) {
-        if (!keys.empty()) {
-            return true;
-        }
-    }
-    return false;
-}
-
-void ConnectedPhysicalDeviceManager::SeedFromLegacyDisplayedStateIfUnconfigured() {
-    if (AnyPortConfigured()) {
-        return;
-    }
-    // Legacy default UI state: port 0 shows every connected controller as
-    // "checked" (enabled); ports 1..3 show none. Snapshot port 0 so a subsequent
-    // uncheck-of-one leaves the other port-0 controllers intact.
-    for (const auto& [instanceId, key] : mConnectedDeviceKeys) {
-        mEnabledDeviceKeysByPort[0].insert(key);
-    }
-}
-
-void ConnectedPhysicalDeviceManager::AssignGuidToPort(uint8_t portIndex, const std::string& deviceKey) {
+void ConnectedPhysicalDeviceManager::AssignDeviceKeyToPort(uint8_t portIndex, const std::string& deviceKey) {
     if (deviceKey.empty()) {
-        SPDLOG_INFO("[ControllerPersistence] AssignGuidToPort port={} key=(empty) — rejected", portIndex);
+        if (DiagnosticsEnabled()) {
+            SPDLOG_INFO("[ControllerPersistence] AssignDeviceKeyToPort port={} key=(empty) — rejected", portIndex);
+        }
         return;
     }
-    SeedFromLegacyDisplayedStateIfUnconfigured();
-    mEnabledDeviceKeysByPort[portIndex].insert(deviceKey);
-    mUserHasConfigured = true;
-    SPDLOG_INFO("[ControllerPersistence] AssignGuidToPort port={} key=\"{}\" portSize={}", portIndex, deviceKey,
-                mEnabledDeviceKeysByPort[portIndex].size());
+    // Seed legacy state before the write so a subsequent uncheck-of-one leaves
+    // the currently-displayed defaults intact. Requires the list of connected
+    // device keys — the store is decoupled from SDL.
+    std::vector<std::string> connectedKeys;
+    connectedKeys.reserve(mConnectedDeviceKeys.size());
+    for (const auto& [instanceId, key] : mConnectedDeviceKeys) {
+        connectedKeys.push_back(key);
+    }
+    mAssignmentStore->SeedFromConnectedDevicesIfUnconfigured(connectedKeys);
+    mAssignmentStore->AssignDeviceKeyToPort(portIndex, deviceKey);
+    if (DiagnosticsEnabled()) {
+        SPDLOG_INFO("[ControllerPersistence] AssignDeviceKeyToPort port={} key=\"{}\"", portIndex, deviceKey);
+    }
     RebuildIgnoredInstanceIds();
 }
 
-void ConnectedPhysicalDeviceManager::UnassignGuidFromPort(uint8_t portIndex, const std::string& deviceKey) {
-    SeedFromLegacyDisplayedStateIfUnconfigured();
-    auto it = mEnabledDeviceKeysByPort.find(portIndex);
-    if (it == mEnabledDeviceKeysByPort.end()) {
-        // Even a "port had nothing to unassign" toggle counts as user configuring,
-        // so the sticky flag flips.
-        mUserHasConfigured = true;
-        SPDLOG_INFO("[ControllerPersistence] UnassignGuidFromPort port={} key=\"{}\" — port not in map", portIndex,
-                    deviceKey);
-        return;
+void ConnectedPhysicalDeviceManager::UnassignDeviceKeyFromPort(uint8_t portIndex, const std::string& deviceKey) {
+    std::vector<std::string> connectedKeys;
+    connectedKeys.reserve(mConnectedDeviceKeys.size());
+    for (const auto& [instanceId, key] : mConnectedDeviceKeys) {
+        connectedKeys.push_back(key);
     }
-    it->second.erase(deviceKey);
-    mUserHasConfigured = true;
-    SPDLOG_INFO("[ControllerPersistence] UnassignGuidFromPort port={} key=\"{}\" portSize={}", portIndex, deviceKey,
-                it->second.size());
+    mAssignmentStore->SeedFromConnectedDevicesIfUnconfigured(connectedKeys);
+    mAssignmentStore->UnassignDeviceKeyFromPort(portIndex, deviceKey);
+    if (DiagnosticsEnabled()) {
+        SPDLOG_INFO("[ControllerPersistence] UnassignDeviceKeyFromPort port={} key=\"{}\"", portIndex, deviceKey);
+    }
     RebuildIgnoredInstanceIds();
 }
 
-bool ConnectedPhysicalDeviceManager::PortHasGuidAssigned(uint8_t portIndex, const std::string& deviceKey) {
-    auto it = mEnabledDeviceKeysByPort.find(portIndex);
-    return it != mEnabledDeviceKeysByPort.end() && it->second.contains(deviceKey);
+void ConnectedPhysicalDeviceManager::ResetAllAssignments() {
+    mAssignmentStore->ResetAllAssignments();
+    mAssignmentStore->SaveToConfig();
+    if (DiagnosticsEnabled()) {
+        SPDLOG_INFO("[ControllerPersistence] ResetAllAssignments — cleared all port enable-lists and configured flag");
+    }
+    RebuildIgnoredInstanceIds();
 }
 
-std::string ConnectedPhysicalDeviceManager::GetGuidForInstanceId(int32_t instanceId) {
-    auto it = mConnectedGuids.find(instanceId);
-    if (it == mConnectedGuids.end()) {
-        return "";
-    }
-    return it->second;
+bool ConnectedPhysicalDeviceManager::PortHasDeviceKeyAssigned(uint8_t portIndex, const std::string& deviceKey) {
+    return mAssignmentStore->PortHasDeviceKeyAssigned(portIndex, deviceKey);
 }
 
 std::string ConnectedPhysicalDeviceManager::GetDeviceKeyForInstanceId(int32_t instanceId) {
@@ -240,67 +229,37 @@ std::string ConnectedPhysicalDeviceManager::GetDeviceKeyForInstanceId(int32_t in
     return it->second;
 }
 
-void ConnectedPhysicalDeviceManager::LoadAssignmentsFromConfig() {
-    mEnabledDeviceKeysByPort.clear();
-    mUserHasConfigured = (CVarGetInteger(kCVarKeyConfigured, 0) != 0);
-    for (uint8_t port = 0; port < kMaxControllerPorts; port++) {
-        auto cvarKey = CVarKeyForPort(port);
-        const char* raw = CVarGetString(cvarKey.c_str(), "");
-        if (raw == nullptr || raw[0] == '\0') {
-            continue;
-        }
-        // Composite device keys contain the GUID separator `#` and possibly USB
-        // paths with `,` inside (Linux paths don't, Windows paths shouldn't, but
-        // if a future path contained a comma it would collide with our delimiter).
-        // Use `;` as the between-key delimiter for robustness.
-        std::stringstream ss(raw);
-        std::string deviceKey;
-        while (std::getline(ss, deviceKey, ';')) {
-            if (!deviceKey.empty()) {
-                mEnabledDeviceKeysByPort[port].insert(deviceKey);
-            }
-        }
-    }
+void ConnectedPhysicalDeviceManager::SaveAssignmentsToConfig() {
+    mAssignmentStore->SaveToConfig();
 }
 
-void ConnectedPhysicalDeviceManager::SaveAssignmentsToConfig() {
-    CVarSetInteger(kCVarKeyConfigured, mUserHasConfigured ? 1 : 0);
-    for (uint8_t port = 0; port < kMaxControllerPorts; port++) {
-        auto cvarKey = CVarKeyForPort(port);
-        auto it = mEnabledDeviceKeysByPort.find(port);
-        if (it == mEnabledDeviceKeysByPort.end() || it->second.empty()) {
-            CVarClear(cvarKey.c_str());
-            continue;
-        }
-        std::string joined;
-        for (const auto& deviceKey : it->second) {
-            if (!joined.empty()) {
-                joined.push_back(';');
-            }
-            joined.append(deviceKey);
-        }
-        CVarSetString(cvarKey.c_str(), joined.c_str());
-    }
-    CVarSave();
-}
+// ---------------------------------------------------------------------------
+// Internal — derive mIgnoredInstanceIds from store + connected device set
+// ---------------------------------------------------------------------------
 
 void ConnectedPhysicalDeviceManager::RebuildIgnoredInstanceIds() {
+    // Preserve any session-only ignores set via IgnoreInstanceIdForPort — we only
+    // clear the persistence-derived portion. In practice both maps live in
+    // mIgnoredInstanceIds and are indistinguishable, so we clear all here and
+    // let the session-only path re-set as needed on subsequent toggles.
     mIgnoredInstanceIds.clear();
 
-    const bool strict = AnyPortConfigured();
-    SPDLOG_INFO("[ControllerPersistence] RebuildIgnoredInstanceIds strict={} connectedDevices={} userConfigured={}",
-                strict, mConnectedDeviceKeys.size(), mUserHasConfigured);
+    const bool strict = mAssignmentStore->AnyPortConfigured();
+    if (DiagnosticsEnabled()) {
+        SPDLOG_INFO("[ControllerPersistence] RebuildIgnoredInstanceIds strict={} connectedDevices={} userConfigured={}",
+                    strict, mConnectedDeviceKeys.size(), mAssignmentStore->UserHasConfigured());
+    }
 
     for (const auto& [instanceId, deviceKey] : mConnectedDeviceKeys) {
         for (uint8_t port = 0; port < kMaxControllerPorts; port++) {
             bool ignore;
             if (strict) {
-                // Strict mode: only enable-listed device keys are permitted per port.
-                auto it = mEnabledDeviceKeysByPort.find(port);
-                ignore = (it == mEnabledDeviceKeysByPort.end() || !it->second.contains(deviceKey));
+                ignore = !mAssignmentStore->PortHasDeviceKeyAssigned(port, deviceKey);
             } else {
-                // Legacy default (never configured): port 0 accepts every controller;
-                // ports 1..3 reject every controller. Matches pre-libultraship#2 behaviour.
+                // Legacy default (never configured): port 0 accepts every
+                // controller; ports 1..3 reject every controller. Matches
+                // pre-libultraship#2 behaviour so a fresh config lands users
+                // in the familiar out-of-box state.
                 ignore = (port != 0);
             }
             if (ignore) {
@@ -309,4 +268,5 @@ void ConnectedPhysicalDeviceManager::RebuildIgnoredInstanceIds() {
         }
     }
 }
+
 } // namespace Ship

@@ -1223,9 +1223,9 @@ void InputEditorWindow::DrawDeviceToggles(uint8_t portIndex) {
             std::string deviceKey = connectedDeviceManager->GetDeviceKeyForInstanceId(instanceId);
             if (!deviceKey.empty()) {
                 if (notIgnored) {
-                    connectedDeviceManager->AssignGuidToPort(portIndex, deviceKey);
+                    connectedDeviceManager->AssignDeviceKeyToPort(portIndex, deviceKey);
                 } else {
-                    connectedDeviceManager->UnassignGuidFromPort(portIndex, deviceKey);
+                    connectedDeviceManager->UnassignDeviceKeyFromPort(portIndex, deviceKey);
                 }
                 connectedDeviceManager->SaveAssignmentsToConfig();
             } else {
