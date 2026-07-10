@@ -18,6 +18,18 @@ bool DiagnosticsEnabled() {
     return CVarGetInteger(kCVarDebugKey, 0) != 0;
 }
 
+// Master enable switch for the persistence system. When 0, the manager behaves
+// exactly like the pre-libultraship#2 code: port 0 accepts every controller,
+// ports 1..3 accept none, and no save file lookups apply. UI toggles are
+// session-only (falling through to IgnoreInstanceIdForPort). The persisted
+// enable-list and sticky configured flag stay on disk untouched so that
+// re-enabling this CVar restores the user's saved assignments.
+constexpr const char* kCVarEnabledKey = "gControllers.PersistenceEnabled";
+
+bool PersistenceEnabled() {
+    return CVarGetInteger(kCVarEnabledKey, 1) != 0;
+}
+
 // Build a per-device composite key that identifies a physical controller as
 // stably as SDL will allow. Preference order:
 //   1. GUID + `#` + SDL_JoystickPath  — stable per USB port on Windows/Linux;
@@ -244,10 +256,15 @@ void ConnectedPhysicalDeviceManager::RebuildIgnoredInstanceIds() {
     // let the session-only path re-set as needed on subsequent toggles.
     mIgnoredInstanceIds.clear();
 
-    const bool strict = mAssignmentStore->AnyPortConfigured();
+    // When the master persistence switch is off, force legacy-default rules
+    // regardless of what the store has saved. Saved data is preserved on disk
+    // for later re-enable.
+    const bool persistenceOn = PersistenceEnabled();
+    const bool strict = persistenceOn && mAssignmentStore->AnyPortConfigured();
     if (DiagnosticsEnabled()) {
-        SPDLOG_INFO("[ControllerPersistence] RebuildIgnoredInstanceIds strict={} connectedDevices={} userConfigured={}",
-                    strict, mConnectedDeviceKeys.size(), mAssignmentStore->UserHasConfigured());
+        SPDLOG_INFO(
+            "[ControllerPersistence] RebuildIgnoredInstanceIds persistenceOn={} strict={} connectedDevices={} userConfigured={}",
+            persistenceOn, strict, mConnectedDeviceKeys.size(), mAssignmentStore->UserHasConfigured());
     }
 
     for (const auto& [instanceId, deviceKey] : mConnectedDeviceKeys) {
