@@ -6,6 +6,7 @@
 #include "ship/controller/controldevice/controller/mapping/sdl/SDLAxisDirectionToButtonMapping.h"
 #include "ship/controller/controldeck/ControlDeck.h"
 #include "libultraship/libultra/controller.h"
+#include <SDL2/SDL.h>
 
 #define SCALE_IMGUI_SIZE(value) ((value / 13.0f) * ImGui::GetFontSize())
 
@@ -1217,10 +1218,30 @@ void InputEditorWindow::DrawDeviceToggles(uint8_t portIndex) {
         auto notIgnored = !connectedDeviceManager->PortIsIgnoringInstanceId(portIndex, instanceId);
         ImGui::PopItemFlag();
         if (ImGui::Checkbox(StringHelper::Sprintf("###instanceId_%d", instanceId).c_str(), &notIgnored)) {
-            if (notIgnored) {
-                connectedDeviceManager->UnignoreInstanceIdForPort(portIndex, instanceId);
+            // Persist the assignment via SDL joystick GUID (stable across launches)
+            // so multi-instance / multi-controller users don't re-assign every launch.
+            // See Plans/controller_port_persistence_plan.md, libultraship#2.
+            std::string guid;
+            if (auto* joystick = SDL_JoystickFromInstanceID(instanceId); joystick != nullptr) {
+                char guidCStr[33] = "";
+                SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(joystick), guidCStr, sizeof(guidCStr));
+                guid = guidCStr;
+            }
+            if (!guid.empty()) {
+                if (notIgnored) {
+                    connectedDeviceManager->AssignGuidToPort(portIndex, guid);
+                } else {
+                    connectedDeviceManager->UnassignGuidFromPort(portIndex, guid);
+                }
+                connectedDeviceManager->SaveAssignmentsToConfig();
             } else {
-                connectedDeviceManager->IgnoreInstanceIdForPort(portIndex, instanceId);
+                // Fall back to session-only ignore semantics if the GUID lookup
+                // failed (device just disconnected between the check and the toggle).
+                if (notIgnored) {
+                    connectedDeviceManager->UnignoreInstanceIdForPort(portIndex, instanceId);
+                } else {
+                    connectedDeviceManager->IgnoreInstanceIdForPort(portIndex, instanceId);
+                }
             }
         };
         ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);

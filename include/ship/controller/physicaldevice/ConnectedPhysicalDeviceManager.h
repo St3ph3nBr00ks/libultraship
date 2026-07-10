@@ -82,9 +82,72 @@ class ConnectedPhysicalDeviceManager {
     /** @brief Re-scans all connected SDL gamepads and rebuilds the internal maps. */
     void RefreshConnectedSDLGamepads();
 
+    /**
+     * @brief Adds a controller (by SDL joystick GUID) to a port's enable-list and persists.
+     *
+     * Once ANY port has one or more assignments, strict mode is active for all ports:
+     * only enable-listed GUIDs are permitted per port. When every port is empty, the
+     * legacy default applies (port 0 accepts everything; ports 1-3 accept nothing).
+     *
+     * @param portIndex Zero-based controller port index.
+     * @param guid      SDL joystick GUID string (32-char hex, as returned by
+     *                  SDL_JoystickGetGUIDString).
+     */
+    void AssignGuidToPort(uint8_t portIndex, const std::string& guid);
+
+    /**
+     * @brief Removes a controller (by SDL joystick GUID) from a port's enable-list and persists.
+     * @param portIndex Zero-based controller port index.
+     * @param guid      SDL joystick GUID string.
+     */
+    void UnassignGuidFromPort(uint8_t portIndex, const std::string& guid);
+
+    /**
+     * @brief Checks whether a GUID is in the given port's enable-list.
+     * @param portIndex Zero-based controller port index.
+     * @param guid      SDL joystick GUID string.
+     * @return true if the port explicitly permits this GUID.
+     */
+    bool PortHasGuidAssigned(uint8_t portIndex, const std::string& guid);
+
+    /** @brief Loads per-port GUID enable-lists from persisted CVars. */
+    void LoadAssignmentsFromConfig();
+
+    /** @brief Saves per-port GUID enable-lists to persisted CVars and flushes to disk. */
+    void SaveAssignmentsToConfig();
+
+    /**
+     * @brief Rebuilds mIgnoredInstanceIds from mEnabledGuidsByPort and the current
+     *        connected-device set.
+     *
+     * Called by RefreshConnectedSDLGamepads() and by Assign/UnassignGuidToPort().
+     */
+    void RebuildIgnoredInstanceIds();
+
   private:
+    /** @brief Returns true if any port has one or more enable-list entries. */
+    bool AnyPortConfigured() const;
+
+    /**
+     * @brief On first transition out of legacy-default mode, snapshot the currently
+     *        DISPLAYED port-0 enable-list (every connected controller) into
+     *        mEnabledGuidsByPort[0] so a subsequent uncheck removes only the intended
+     *        controller instead of collapsing port 0 to empty.
+     *
+     * No-op once any port is already configured.
+     */
+    void SeedFromLegacyDisplayedStateIfUnconfigured();
+
     std::unordered_map<int32_t, SDL_GameController*> mConnectedSDLGamepads;
     std::unordered_map<int32_t, std::string> mConnectedSDLGamepadNames;
     std::unordered_map<uint8_t, std::unordered_set<int32_t>> mIgnoredInstanceIds;
+
+    // Persistence layer (Plans/controller_port_persistence_plan.md, libultraship#2).
+    // Enable-list of SDL joystick GUIDs permitted per controller port.
+    // Sourced from gControllers.PortAssignments.Port{0..3} CVars.
+    std::unordered_map<uint8_t, std::unordered_set<std::string>> mEnabledGuidsByPort;
+    // instanceId → GUID string, populated during RefreshConnectedSDLGamepads so
+    // RebuildIgnoredInstanceIds can filter without re-walking SDL.
+    std::unordered_map<int32_t, std::string> mConnectedGuids;
 };
 } // namespace Ship
