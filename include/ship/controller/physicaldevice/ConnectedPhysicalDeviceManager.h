@@ -110,6 +110,19 @@ class ConnectedPhysicalDeviceManager {
      */
     bool PortHasGuidAssigned(uint8_t portIndex, const std::string& guid);
 
+    /**
+     * @brief Returns the SDL joystick GUID string for a connected instance ID.
+     *
+     * The GUID is captured during RefreshConnectedSDLGamepads and cached, so this
+     * avoids the re-query-SDL failure modes that hit `SDL_JoystickFromInstanceID`
+     * on some builds.
+     *
+     * @param instanceId SDL joystick instance ID.
+     * @return GUID string (32-char hex), or empty string if the instance is not
+     *         currently tracked as a connected gamepad.
+     */
+    std::string GetGuidForInstanceId(int32_t instanceId);
+
     /** @brief Loads per-port GUID enable-lists from persisted CVars. */
     void LoadAssignmentsFromConfig();
 

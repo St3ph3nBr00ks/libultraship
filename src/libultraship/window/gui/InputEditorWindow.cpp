@@ -1221,12 +1221,8 @@ void InputEditorWindow::DrawDeviceToggles(uint8_t portIndex) {
             // Persist the assignment via SDL joystick GUID (stable across launches)
             // so multi-instance / multi-controller users don't re-assign every launch.
             // See Plans/controller_port_persistence_plan.md, libultraship#2.
-            std::string guid;
-            if (auto* joystick = SDL_JoystickFromInstanceID(instanceId); joystick != nullptr) {
-                char guidCStr[33] = "";
-                SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(joystick), guidCStr, sizeof(guidCStr));
-                guid = guidCStr;
-            }
+            // Uses the GUID cached during RefreshConnectedSDLGamepads.
+            std::string guid = connectedDeviceManager->GetGuidForInstanceId(instanceId);
             if (!guid.empty()) {
                 if (notIgnored) {
                     connectedDeviceManager->AssignGuidToPort(portIndex, guid);
@@ -1235,8 +1231,8 @@ void InputEditorWindow::DrawDeviceToggles(uint8_t portIndex) {
                 }
                 connectedDeviceManager->SaveAssignmentsToConfig();
             } else {
-                // Fall back to session-only ignore semantics if the GUID lookup
-                // failed (device just disconnected between the check and the toggle).
+                // Fall back to session-only ignore semantics if the GUID cache
+                // lookup failed.
                 if (notIgnored) {
                     connectedDeviceManager->UnignoreInstanceIdForPort(portIndex, instanceId);
                 } else {

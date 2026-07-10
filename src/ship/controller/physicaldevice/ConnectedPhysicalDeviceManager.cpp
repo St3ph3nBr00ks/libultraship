@@ -145,10 +145,13 @@ void ConnectedPhysicalDeviceManager::SeedFromLegacyDisplayedStateIfUnconfigured(
 
 void ConnectedPhysicalDeviceManager::AssignGuidToPort(uint8_t portIndex, const std::string& guid) {
     if (guid.empty()) {
+        SPDLOG_INFO("[ControllerPersistence] AssignGuidToPort port={} guid=(empty) — rejected", portIndex);
         return;
     }
     SeedFromLegacyDisplayedStateIfUnconfigured();
     mEnabledGuidsByPort[portIndex].insert(guid);
+    SPDLOG_INFO("[ControllerPersistence] AssignGuidToPort port={} guid={} portSize={}", portIndex, guid,
+                mEnabledGuidsByPort[portIndex].size());
     RebuildIgnoredInstanceIds();
 }
 
@@ -156,15 +159,26 @@ void ConnectedPhysicalDeviceManager::UnassignGuidFromPort(uint8_t portIndex, con
     SeedFromLegacyDisplayedStateIfUnconfigured();
     auto it = mEnabledGuidsByPort.find(portIndex);
     if (it == mEnabledGuidsByPort.end()) {
+        SPDLOG_INFO("[ControllerPersistence] UnassignGuidFromPort port={} guid={} — port not in map", portIndex, guid);
         return;
     }
     it->second.erase(guid);
+    SPDLOG_INFO("[ControllerPersistence] UnassignGuidFromPort port={} guid={} portSize={}", portIndex, guid,
+                it->second.size());
     RebuildIgnoredInstanceIds();
 }
 
 bool ConnectedPhysicalDeviceManager::PortHasGuidAssigned(uint8_t portIndex, const std::string& guid) {
     auto it = mEnabledGuidsByPort.find(portIndex);
     return it != mEnabledGuidsByPort.end() && it->second.contains(guid);
+}
+
+std::string ConnectedPhysicalDeviceManager::GetGuidForInstanceId(int32_t instanceId) {
+    auto it = mConnectedGuids.find(instanceId);
+    if (it == mConnectedGuids.end()) {
+        return "";
+    }
+    return it->second;
 }
 
 void ConnectedPhysicalDeviceManager::LoadAssignmentsFromConfig() {
@@ -209,6 +223,8 @@ void ConnectedPhysicalDeviceManager::RebuildIgnoredInstanceIds() {
     mIgnoredInstanceIds.clear();
 
     const bool strict = AnyPortConfigured();
+    SPDLOG_INFO("[ControllerPersistence] RebuildIgnoredInstanceIds strict={} connectedGuids={}",
+                strict, mConnectedGuids.size());
 
     for (const auto& [instanceId, guid] : mConnectedGuids) {
         for (uint8_t port = 0; port < kMaxControllerPorts; port++) {
