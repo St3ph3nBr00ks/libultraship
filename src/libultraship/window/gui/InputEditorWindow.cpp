@@ -1218,21 +1218,17 @@ void InputEditorWindow::DrawDeviceToggles(uint8_t portIndex) {
         auto notIgnored = !connectedDeviceManager->PortIsIgnoringInstanceId(portIndex, instanceId);
         ImGui::PopItemFlag();
         if (ImGui::Checkbox(StringHelper::Sprintf("###instanceId_%d", instanceId).c_str(), &notIgnored)) {
-            // Persist the assignment via SDL joystick GUID (stable across launches)
-            // so multi-instance / multi-controller users don't re-assign every launch.
+            // Persist via composite device key (GUID + path/serial/name-index).
             // See Plans/controller_port_persistence_plan.md, libultraship#2.
-            // Uses the GUID cached during RefreshConnectedSDLGamepads.
-            std::string guid = connectedDeviceManager->GetGuidForInstanceId(instanceId);
-            if (!guid.empty()) {
+            std::string deviceKey = connectedDeviceManager->GetDeviceKeyForInstanceId(instanceId);
+            if (!deviceKey.empty()) {
                 if (notIgnored) {
-                    connectedDeviceManager->AssignGuidToPort(portIndex, guid);
+                    connectedDeviceManager->AssignGuidToPort(portIndex, deviceKey);
                 } else {
-                    connectedDeviceManager->UnassignGuidFromPort(portIndex, guid);
+                    connectedDeviceManager->UnassignGuidFromPort(portIndex, deviceKey);
                 }
                 connectedDeviceManager->SaveAssignmentsToConfig();
             } else {
-                // Fall back to session-only ignore semantics if the GUID cache
-                // lookup failed.
                 if (notIgnored) {
                     connectedDeviceManager->UnignoreInstanceIdForPort(portIndex, instanceId);
                 } else {

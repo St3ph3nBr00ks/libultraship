@@ -123,6 +123,19 @@ class ConnectedPhysicalDeviceManager {
      */
     std::string GetGuidForInstanceId(int32_t instanceId);
 
+    /**
+     * @brief Returns the composite persistence key for a connected instance ID.
+     *
+     * Combines the GUID with SDL_JoystickPath (preferred), joystick serial, or
+     * a name+occurrence-index fallback. Two physically identical controllers
+     * plugged into different USB ports produce distinct keys via their paths.
+     *
+     * @param instanceId SDL joystick instance ID.
+     * @return Composite device key string, or empty string if the instance is
+     *         not currently tracked.
+     */
+    std::string GetDeviceKeyForInstanceId(int32_t instanceId);
+
     /** @brief Loads per-port GUID enable-lists from persisted CVars. */
     void LoadAssignmentsFromConfig();
 
@@ -156,11 +169,18 @@ class ConnectedPhysicalDeviceManager {
     std::unordered_map<uint8_t, std::unordered_set<int32_t>> mIgnoredInstanceIds;
 
     // Persistence layer (Plans/controller_port_persistence_plan.md, libultraship#2).
-    // Enable-list of SDL joystick GUIDs permitted per controller port.
+    // Enable-list of composite device keys permitted per controller port.
+    // Composite key = GUID + `#` + path (or serial or name+index — see BuildDeviceKey).
     // Sourced from gControllers.PortAssignments.Port{0..3} CVars.
-    std::unordered_map<uint8_t, std::unordered_set<std::string>> mEnabledGuidsByPort;
-    // instanceId → GUID string, populated during RefreshConnectedSDLGamepads so
-    // RebuildIgnoredInstanceIds can filter without re-walking SDL.
+    std::unordered_map<uint8_t, std::unordered_set<std::string>> mEnabledDeviceKeysByPort;
+    // instanceId → GUID string, populated during RefreshConnectedSDLGamepads.
     std::unordered_map<int32_t, std::string> mConnectedGuids;
+    // instanceId → composite device key, populated during RefreshConnectedSDLGamepads
+    // so RebuildIgnoredInstanceIds can filter without re-walking SDL.
+    std::unordered_map<int32_t, std::string> mConnectedDeviceKeys;
+    // Sticky "user has taken ownership of controller assignments" flag. Sourced from
+    // gControllers.PortAssignments.Configured. Once set, we never fall back to the
+    // legacy-default (port-0-accepts-all / ports-1..3-accept-none) rule.
+    bool mUserHasConfigured = false;
 };
 } // namespace Ship
